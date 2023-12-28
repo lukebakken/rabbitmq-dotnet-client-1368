@@ -1,8 +1,5 @@
 ﻿using RabbitMQ.Client;
-using RabbitMQ.Client.Events;
 using System.Collections.Concurrent;
-using System.Globalization;
-using System.Text;
 using RabbitMQClient = RabbitMQ.Client;
 
 namespace RabbitMQTimeout
@@ -114,7 +111,7 @@ namespace RabbitMQTimeout
 
             if (!_queues.ContainsKey(channel))
             {
-                var chan = _channels[channel];
+                IModel chan = _channels[channel];
 
                 var arguments = new Dictionary<string, object>
                 {
@@ -122,9 +119,34 @@ namespace RabbitMQTimeout
                 };
 
                 Console.WriteLine($"Creating queue {queue}");
-                chan.QueueDeclare(queue, durable: true, exclusive: false, autoDelete: false, arguments: arguments);
-                chan.QueueBind(queue, "myExchange", routingKey);
-                chan.BasicQos(0, 2, false);
+                bool retrying = true;
+                while (retrying)
+                {
+                    try
+                    {
+                        chan.QueueDeclare(queue, durable: true, exclusive: false, autoDelete: false, arguments: arguments);
+                        chan.QueueBind(queue, "myExchange", routingKey);
+                        chan.BasicQos(0, 2, false);
+                        retrying = false;
+                    }
+                    catch
+                    {
+                        try
+                        {
+                            CloseChannel(channel);
+                        }
+                        catch
+                        {
+                            // Ignore all exceptions here
+                        }
+                        finally
+                        {
+                            CreateChannel(channel);
+                            retrying = true;
+                            Console.WriteLine($"RETRY: Creating queue {queue}");
+                        }
+                    }
+                }
 
                 _queues.Add(channel, queue);
                 changeOrCreate = true;
@@ -212,7 +234,7 @@ namespace RabbitMQTimeout
 
             Console.WriteLine($"Closing connection '{_connection.ClientProvidedName}'");
             int? numHanlders = OnConnectionShutdown?.GetInvocationList().Count();
-            if(numHanlders.HasValue) 
+            if (numHanlders.HasValue)
                 Console.WriteLine($"Close handlers: {numHanlders}");
 
             try
@@ -232,7 +254,7 @@ namespace RabbitMQTimeout
                 Console.WriteLine("Executing external handler");
                 OnConnectionShutdown?.Invoke();
             }
-            catch(Exception ex)
+            catch (Exception ex)
             {
                 Console.WriteLine($"Error closing conection {ex.GetType()}. {ex.Message}");
             }
